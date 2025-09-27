@@ -8,7 +8,7 @@ A Turtle WoW addon that announces quest updates in the party chat to make commun
 - `/qa test` → (must be in a party) sends a fake quest update to verify that the addon works.
 
 ## Example
-![Example](images/QuestAnnouncer.png)
+![Example](/Images/QuestAnnouncer.png)
 
 ## Installation
 
