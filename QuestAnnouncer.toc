@@ -1,0 +1,5 @@
+## Interface: 11200
+## Title: QuestAnnouncer
+## Author: Islacoul
+## Notes: Provide an update of quests in group party
+QuestAnnouncer.lua
