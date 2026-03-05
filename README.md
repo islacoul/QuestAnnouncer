@@ -14,7 +14,7 @@ A Turtle WoW addon that announces quest updates in the party chat to make commun
 1. Open `Code` dropdown menu (slightly to the top right)
 2. Select `Download as ZIP`
 3. Extract downloaded zip into `WoW/Interface/AddOns`
-4. Rename folder to `QuestAnnouncer` from `QuestAnnouncer-main`
+4. Rename folder from `QuestAnnouncer-main` to `QuestAnnouncer` 
 
 
 
