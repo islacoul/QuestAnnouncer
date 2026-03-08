@@ -1,12 +1,18 @@
 local QuestAnnouncer = CreateFrame("Frame")
 QuestAnnouncer:RegisterEvent("QUEST_LOG_UPDATE")
-QuestAnnouncer:RegisterEvent("QUEST_ACCEPTED")
 
 local questProgress = {}
 local knownQuests = {}  -- [title] = { level=N, isComplete=bool }
 local initialized = false
+local debugMode = false
 
 local lastUpdate = 0
+
+local function DBG(msg)
+    if debugMode then
+        DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff[QA Debug]|r " .. tostring(msg))
+    end
+end
 
 local function GetQuestIDByName(name)
     if not (pfDB and pfDB["quests"] and pfDB["quests"]["data"]) then
@@ -29,8 +35,11 @@ local function MakeQuestLink(id, title, level)
 end
 
 local function Announce(msg)
-    if msg and msg ~= "" and GetNumPartyMembers() > 0 then
-        SendChatMessage(msg, "PARTY")
+    if msg and msg ~= "" then
+        DBG("Announce -> " .. msg .. " (party members: " .. GetNumPartyMembers() .. ")")
+        if GetNumPartyMembers() > 0 then
+            SendChatMessage(msg, "PARTY")
+        end
     end
 end
 
@@ -56,31 +65,13 @@ end
 QuestAnnouncer:SetScript("OnEvent", function()
     local currentSnapshot = BuildCurrentQuestSnapshot()
 
-    -- QUEST_ACCEPTED: announce immediately, before any objective progress
-    -- arg1 in WoW 1.12 is the quest log index of the accepted quest
-    if event == "QUEST_ACCEPTED" then
-        local title, level
-        if arg1 then
-            title, level = GetQuestLogTitle(arg1)
-        end
-        if title then
-            -- Always announce on acceptance, regardless of knownQuests state
-            local questID = GetQuestIDByName(title)
-            local link = MakeQuestLink(questID, title, level or 1)
-            Announce(link .. " - Quest started")
-            -- Reset any stale progress and mark as known to prevent QUEST_LOG_UPDATE double-announcement
-            ClearQuestProgress(title)
-            knownQuests[title] = { level = level or 1, isComplete = false }
-        end
-        if not initialized then
-            knownQuests = currentSnapshot
-            initialized = true
-        end
-        return
-    end
+    DBG("QUEST_LOG_UPDATE fired | initialized=" .. tostring(initialized))
 
-    -- QUEST_LOG_UPDATE: initial snapshot load, abandon detection, fallback start detection
+    -- QUEST_LOG_UPDATE: initial snapshot load, abandon detection, start detection
     if not initialized then
+        local count = 0
+        for _ in pairs(currentSnapshot) do count = count + 1 end
+        DBG("Init snapshot: " .. count .. " quests loaded")
         knownQuests = currentSnapshot
         initialized = true
     else
@@ -93,6 +84,7 @@ QuestAnnouncer:SetScript("OnEvent", function()
         end
         for _, title in ipairs(toRemove) do
             local data = knownQuests[title]
+            DBG("Quest removed: '" .. title .. "' isComplete=" .. tostring(data.isComplete))
             if not data.isComplete then
                 local questID = GetQuestIDByName(title)
                 local link = MakeQuestLink(questID, title, data.level)
@@ -102,9 +94,10 @@ QuestAnnouncer:SetScript("OnEvent", function()
             knownQuests[title] = nil
         end
 
-        -- Detect newly added quests (fallback if QUEST_ACCEPTED did not fire)
+        -- Detect newly added quests
         for title, data in pairs(currentSnapshot) do
             if not knownQuests[title] then
+                DBG("New quest detected: '" .. title .. "' level=" .. tostring(data.level))
                 local questID = GetQuestIDByName(title)
                 local link = MakeQuestLink(questID, title, data.level)
                 Announce(link .. " - Quest started")
@@ -132,12 +125,14 @@ QuestAnnouncer:SetScript("OnEvent", function()
             local numObjectives = GetNumQuestLeaderBoards()
             local allDone = true
 
+            DBG("Scanning '" .. title .. "': " .. numObjectives .. " objectives | isComplete=" .. tostring(isComplete))
             for j = 1, numObjectives do
                 local desc, otype, done = GetQuestLogLeaderBoard(j)
                 if desc then
                     local key = title .. j
                     local _, _, cur, total = string.find(desc, "(%d+)%s*/%s*(%d+)")
                     cur, total = tonumber(cur), tonumber(total)
+                    DBG("  obj" .. j .. " type='" .. tostring(otype) .. "' done=" .. tostring(done) .. " cur=" .. tostring(cur) .. " total=" .. tostring(total) .. " desc='" .. tostring(desc) .. "'")
 
                     if not done then
                         allDone = false
@@ -174,7 +169,7 @@ QuestAnnouncer:SetScript("OnEvent", function()
     end
 end)
 
-local QUESTANNOUNCER_VERSION = "1.0.1"
+local QUESTANNOUNCER_VERSION = "1.0.2"
 
 SLASH_QUESTANNOUNCER1 = "/qa"
 SlashCmdList["QUESTANNOUNCER"] = function(msg)
@@ -187,9 +182,17 @@ SlashCmdList["QUESTANNOUNCER"] = function(msg)
         Announce("Quest Complete: " .. link)
     elseif msg == "version" then
         print("|cffffcc00QuestAnnouncer:|r version " .. QUESTANNOUNCER_VERSION)
+    elseif msg == "debug" then
+        debugMode = not debugMode
+        if debugMode then
+            print("|cffffcc00QuestAnnouncer:|r |cff00ccffdebug ON|r - logs will appear in this chat frame")
+        else
+            print("|cffffcc00QuestAnnouncer:|r |cff888888debug OFF|r")
+        end
     else
         print("|cffffcc00QuestAnnouncer:|r available commands :")
         print(" - /qa test : test to verify that the addon works correctly in the party chat")
         print(" - /qa version : display the current version")
+        print(" - /qa debug : toggle debug mode (logs events to chat frame)")
     end
 end
