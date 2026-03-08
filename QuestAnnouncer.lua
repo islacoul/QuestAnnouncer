@@ -57,16 +57,25 @@ QuestAnnouncer:SetScript("OnEvent", function()
     local currentSnapshot = BuildCurrentQuestSnapshot()
 
     -- QUEST_ACCEPTED: announce immediately, before any objective progress
+    -- arg1 in WoW 1.12 is the quest log index of the accepted quest
     if event == "QUEST_ACCEPTED" then
-        for title, data in pairs(currentSnapshot) do
-            if not knownQuests[title] then
-                local questID = GetQuestIDByName(title)
-                local link = MakeQuestLink(questID, title, data.level)
-                Announce(link .. " - Quest started")
-                knownQuests[title] = data
-            end
+        local title, level
+        if arg1 then
+            title, level = GetQuestLogTitle(arg1)
         end
-        initialized = true
+        if title then
+            -- Always announce on acceptance, regardless of knownQuests state
+            local questID = GetQuestIDByName(title)
+            local link = MakeQuestLink(questID, title, level or 1)
+            Announce(link .. " - Quest started")
+            -- Reset any stale progress and mark as known to prevent QUEST_LOG_UPDATE double-announcement
+            ClearQuestProgress(title)
+            knownQuests[title] = { level = level or 1, isComplete = false }
+        end
+        if not initialized then
+            knownQuests = currentSnapshot
+            initialized = true
+        end
         return
     end
 
@@ -165,6 +174,8 @@ QuestAnnouncer:SetScript("OnEvent", function()
     end
 end)
 
+local QUESTANNOUNCER_VERSION = "1.0.1"
+
 SLASH_QUESTANNOUNCER1 = "/qa"
 SlashCmdList["QUESTANNOUNCER"] = function(msg)
     msg = string.lower(msg or "")
@@ -174,8 +185,11 @@ SlashCmdList["QUESTANNOUNCER"] = function(msg)
         Announce(link .. " started")
         Announce(link .. " - 3/10 Fake Mobs slain")
         Announce("Quest Complete: " .. link)
+    elseif msg == "version" then
+        print("|cffffcc00QuestAnnouncer:|r version " .. QUESTANNOUNCER_VERSION)
     else
         print("|cffffcc00QuestAnnouncer:|r available commands :")
         print(" - /qa test : test to verify that the addon works correctly in the party chat")
+        print(" - /qa version : display the current version")
     end
 end
