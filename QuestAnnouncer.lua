@@ -6,8 +6,6 @@ local knownQuests = {}  -- [title] = { level=N, isComplete=bool }
 local initialized = false
 local debugMode = false
 
-local lastUpdate = 0
-
 local function DBG(msg)
     if debugMode then
         DEFAULT_CHAT_FRAME:AddMessage("|cff00ccff[QA Debug]|r " .. tostring(msg))
@@ -71,69 +69,96 @@ QuestAnnouncer:SetScript("OnEvent", function()
         DBG("QUEST_LOG_UPDATE fired | initialized=" .. tostring(initialized))
     end
 
-    -- QUEST_LOG_UPDATE: initial snapshot load, abandon detection, start detection
+    -- First event: silently initialize all state, no announcements
     if not initialized then
-        local count = 0
-        for _ in pairs(currentSnapshot) do count = count + 1 end
-        if debugMode then
-            DBG("Init snapshot: " .. count .. " quests loaded")
-        end
         knownQuests = currentSnapshot
-        initialized = true
-    else
-        -- Detect quests that disappeared from the log
-        local toRemove = {}
-        for title in pairs(knownQuests) do
-            if not currentSnapshot[title] then
-                table.insert(toRemove, title)
-            end
-        end
-        for _, title in ipairs(toRemove) do
-            local data = knownQuests[title]
-            if debugMode then
-                DBG("Quest removed: '" .. title .. "' isComplete=" .. tostring(data.isComplete))
-            end
-            if not data.isComplete then
-                local questID = GetQuestIDByName(title)
-                local link = MakeQuestLink(questID, title, data.level)
-                Announce("Abandoned: " .. link)
-            end
-            ClearQuestProgress(title)
-            knownQuests[title] = nil
-        end
-
-        -- Detect newly added quests
-        for title, data in pairs(currentSnapshot) do
-            if not knownQuests[title] then
-                if debugMode then
-                    DBG("New quest detected: '" .. title .. "' level=" .. tostring(data.level))
+        local numEntries = GetNumQuestLogEntries()
+        for i = 1, numEntries do
+            local title, _, _, isHeader, _, isComplete = GetQuestLogTitle(i)
+            if title and not isHeader then
+                SelectQuestLogEntry(i)
+                local numObjectives = GetNumQuestLeaderBoards()
+                for j = 1, numObjectives do
+                    local desc = GetQuestLogLeaderBoard(j)
+                    if desc then
+                        questProgress[title .. j] = desc
+                    end
                 end
-                local questID = GetQuestIDByName(title)
-                local link = MakeQuestLink(questID, title, data.level)
-                Announce(link .. " - Quest started")
-                knownQuests[title] = data
+                if isComplete == 1 then
+                    questProgress[title .. "_COMPLETE"] = true
+                end
             end
         end
+        if debugMode then
+            local count = 0
+            for _ in pairs(currentSnapshot) do count = count + 1 end
+            DBG("Init: " .. count .. " quests loaded, questProgress silently initialized")
+        end
+        initialized = true
+        return
     end
 
-    -- Keep isComplete state up to date for turn-in detection
+    -- Detect quests that disappeared from the log
+    local toRemove = {}
+    for title in pairs(knownQuests) do
+        if not currentSnapshot[title] then
+            table.insert(toRemove, title)
+        end
+    end
+    for _, title in ipairs(toRemove) do
+        local data = knownQuests[title]
+        if debugMode then
+            DBG("Quest removed: '" .. title .. "' isComplete=" .. tostring(data.isComplete) .. " progressComplete=" .. tostring(questProgress[title .. "_COMPLETE"] == true))
+        end
+        if not data.isComplete and not questProgress[title .. "_COMPLETE"] then
+            local questID = GetQuestIDByName(title)
+            local link = MakeQuestLink(questID, title, data.level)
+            Announce("Abandoned: " .. link)
+        end
+        ClearQuestProgress(title)
+        knownQuests[title] = nil
+    end
+
+    -- Detect newly added quests
     for title, data in pairs(currentSnapshot) do
-        if knownQuests[title] then
-            knownQuests[title].isComplete = data.isComplete
+        if not knownQuests[title] then
+            if debugMode then
+                DBG("New quest detected: '" .. title .. "' level=" .. tostring(data.level))
+            end
+            local questID = GetQuestIDByName(title)
+            local link = MakeQuestLink(questID, title, data.level)
+            Announce(link .. " - Quest started")
+            knownQuests[title] = data
         end
     end
 
-    -- Throttle objective progress scanning only
-    if GetTime() - lastUpdate < 0.5 then return end
-    lastUpdate = GetTime()
+    -- Update isComplete (one-directional) and detect Quest Complete before scan
+    for title, data in pairs(currentSnapshot) do
+        if knownQuests[title] and data.isComplete then
+            knownQuests[title].isComplete = true
+        end
+        if data.isComplete and not questProgress[title .. "_COMPLETE"] then
+            questProgress[title .. "_COMPLETE"] = true
+            if knownQuests[title] then
+                knownQuests[title].isComplete = true
+            end
+            local questID = GetQuestIDByName(title)
+            local link = MakeQuestLink(questID, title, data.level)
+            if debugMode then
+                DBG("Quest Complete (pre-scan): '" .. title .. "'")
+            end
+            Announce("Quest Complete: " .. link)
+        end
+    end
 
+    -- Scan all quest objectives for progress updates (no throttle: questProgress guards prevent duplicates)
     local numEntries = GetNumQuestLogEntries()
     for i = 1, numEntries do
         local title, level, _, isHeader, _, isComplete = GetQuestLogTitle(i)
         if title and not isHeader then
             SelectQuestLogEntry(i)
             local numObjectives = GetNumQuestLeaderBoards()
-            local allDone = true
+            local allDone = (numObjectives > 0)
 
             if debugMode then
                 DBG("Scanning '" .. title .. "': " .. numObjectives .. " objectives | isComplete=" .. tostring(isComplete))
@@ -152,38 +177,36 @@ QuestAnnouncer:SetScript("OnEvent", function()
                         allDone = false
                     end
 
-                    if cur and total then
-                        if cur > 0 or done then
-                            if questProgress[key] ~= desc then
-                                questProgress[key] = desc
-                                local questID = GetQuestIDByName(title)
-                                local link = MakeQuestLink(questID, title, level)
-                                Announce(link .. " - " .. desc)
-                            end
-                        elseif questProgress[key] == nil then
-                            -- Initialize tracking without announcing (cur == 0)
-                            questProgress[key] = desc
+                    -- Announce only if desc changed AND there is actual numeric progress
+                    if questProgress[key] ~= desc then
+                        questProgress[key] = desc
+                        if cur and total and (cur > 0 or done) then
+                            local questID = GetQuestIDByName(title)
+                            local link = MakeQuestLink(questID, title, level)
+                            Announce(link .. " - " .. desc)
                         end
                     end
                 end
             end
 
-            if isComplete == 1 or (numObjectives > 0 and allDone) then
-                if not questProgress[title .. "_COMPLETE"] then
-                    questProgress[title .. "_COMPLETE"] = true
-                    if knownQuests[title] then
-                        knownQuests[title].isComplete = true
-                    end
-                    local questID = GetQuestIDByName(title)
-                    local link = MakeQuestLink(questID, title, level)
-                    Announce("Quest Complete: " .. link)
+            -- Fallback Quest Complete for quests where isComplete may lag behind allDone
+            if (isComplete == 1 or allDone) and not questProgress[title .. "_COMPLETE"] then
+                questProgress[title .. "_COMPLETE"] = true
+                if knownQuests[title] then
+                    knownQuests[title].isComplete = true
                 end
+                local questID = GetQuestIDByName(title)
+                local link = MakeQuestLink(questID, title, level)
+                if debugMode then
+                    DBG("Quest Complete (scan fallback): '" .. title .. "'")
+                end
+                Announce("Quest Complete: " .. link)
             end
         end
     end
 end)
 
-local QUESTANNOUNCER_VERSION = "1.0.3"
+local QUESTANNOUNCER_VERSION = "1.0.5"
 
 SLASH_QUESTANNOUNCER1 = "/qa"
 SlashCmdList["QUESTANNOUNCER"] = function(msg)
