@@ -1,8 +1,10 @@
 local QuestAnnouncer = CreateFrame("Frame")
 QuestAnnouncer:RegisterEvent("QUEST_LOG_UPDATE")
+QuestAnnouncer:RegisterEvent("QUEST_ACCEPTED")
 
 local questProgress = {}
-local questStarted = {}
+local knownQuests = {}  -- [title] = { level=N, isComplete=bool }
+local initialized = false
 
 local lastUpdate = 0
 
@@ -32,7 +34,84 @@ local function Announce(msg)
     end
 end
 
+local function BuildCurrentQuestSnapshot()
+    local snapshot = {}
+    local numEntries = GetNumQuestLogEntries()
+    for i = 1, numEntries do
+        local title, level, _, isHeader, _, isComplete = GetQuestLogTitle(i)
+        if title and not isHeader then
+            snapshot[title] = { level = level or 1, isComplete = (isComplete == 1) }
+        end
+    end
+    return snapshot
+end
+
+local function ClearQuestProgress(title)
+    questProgress[title .. "_COMPLETE"] = nil
+    for j = 1, 20 do
+        questProgress[title .. j] = nil
+    end
+end
+
 QuestAnnouncer:SetScript("OnEvent", function()
+    local currentSnapshot = BuildCurrentQuestSnapshot()
+
+    -- QUEST_ACCEPTED: announce immediately, before any objective progress
+    if event == "QUEST_ACCEPTED" then
+        for title, data in pairs(currentSnapshot) do
+            if not knownQuests[title] then
+                local questID = GetQuestIDByName(title)
+                local link = MakeQuestLink(questID, title, data.level)
+                Announce(link .. " - Quest started")
+                knownQuests[title] = data
+            end
+        end
+        initialized = true
+        return
+    end
+
+    -- QUEST_LOG_UPDATE: initial snapshot load, abandon detection, fallback start detection
+    if not initialized then
+        knownQuests = currentSnapshot
+        initialized = true
+    else
+        -- Detect quests that disappeared from the log
+        local toRemove = {}
+        for title in pairs(knownQuests) do
+            if not currentSnapshot[title] then
+                toRemove[#toRemove + 1] = title
+            end
+        end
+        for _, title in ipairs(toRemove) do
+            local data = knownQuests[title]
+            if not data.isComplete then
+                local questID = GetQuestIDByName(title)
+                local link = MakeQuestLink(questID, title, data.level)
+                Announce("Abandoned: " .. link)
+            end
+            ClearQuestProgress(title)
+            knownQuests[title] = nil
+        end
+
+        -- Detect newly added quests (fallback if QUEST_ACCEPTED did not fire)
+        for title, data in pairs(currentSnapshot) do
+            if not knownQuests[title] then
+                local questID = GetQuestIDByName(title)
+                local link = MakeQuestLink(questID, title, data.level)
+                Announce(link .. " - Quest started")
+                knownQuests[title] = data
+            end
+        end
+    end
+
+    -- Keep isComplete state up to date for turn-in detection
+    for title, data in pairs(currentSnapshot) do
+        if knownQuests[title] then
+            knownQuests[title].isComplete = data.isComplete
+        end
+    end
+
+    -- Throttle objective progress scanning only
     if GetTime() - lastUpdate < 0.5 then return end
     lastUpdate = GetTime()
 
@@ -45,7 +124,7 @@ QuestAnnouncer:SetScript("OnEvent", function()
             local allDone = true
 
             for j = 1, numObjectives do
-                local desc, type, done = GetQuestLogLeaderBoard(j)
+                local desc, otype, done = GetQuestLogLeaderBoard(j)
                 if desc then
                     local key = title .. j
                     local _, _, cur, total = string.find(desc, "(%d+)%s*/%s*(%d+)")
@@ -55,19 +134,17 @@ QuestAnnouncer:SetScript("OnEvent", function()
                         allDone = false
                     end
 
-                    if (type == "item" or type == "monster") and cur and total then
-                        if cur == 0 and not questStarted[title] then
-                            questStarted[title] = true
-                            local questID = GetQuestIDByName(title)
-                            local link = MakeQuestLink(questID, title, level)
-                            Announce(link .. " started")
-                        elseif cur > 0 or done then
+                    if cur and total then
+                        if cur > 0 or done then
                             if questProgress[key] ~= desc then
                                 questProgress[key] = desc
                                 local questID = GetQuestIDByName(title)
                                 local link = MakeQuestLink(questID, title, level)
                                 Announce(link .. " - " .. desc)
                             end
+                        elseif questProgress[key] == nil then
+                            -- Initialize tracking without announcing (cur == 0)
+                            questProgress[key] = desc
                         end
                     end
                 end
@@ -76,6 +153,9 @@ QuestAnnouncer:SetScript("OnEvent", function()
             if isComplete == 1 or (numObjectives > 0 and allDone) then
                 if not questProgress[title .. "_COMPLETE"] then
                     questProgress[title .. "_COMPLETE"] = true
+                    if knownQuests[title] then
+                        knownQuests[title].isComplete = true
+                    end
                     local questID = GetQuestIDByName(title)
                     local link = MakeQuestLink(questID, title, level)
                     Announce("Quest Complete: " .. link)
