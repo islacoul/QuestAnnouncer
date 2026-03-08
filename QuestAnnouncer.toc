@@ -1,7 +1,7 @@
 ## Interface: 11200
 ## Title: QuestAnnouncer
 ## Author: Islacoul
-## Version: 1.0.2
+## Version: 1.0.3
 ## Notes: Provide an update of quests in group party
 ## Dependencies: pfQuest
 ## DefaultState: Enabled

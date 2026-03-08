@@ -36,7 +36,9 @@ end
 
 local function Announce(msg)
     if msg and msg ~= "" then
-        DBG("Announce -> " .. msg .. " (party members: " .. GetNumPartyMembers() .. ")")
+        if debugMode then
+            DBG("Announce -> " .. msg .. " (party members: " .. GetNumPartyMembers() .. ")")
+        end
         if GetNumPartyMembers() > 0 then
             SendChatMessage(msg, "PARTY")
         end
@@ -65,13 +67,17 @@ end
 QuestAnnouncer:SetScript("OnEvent", function()
     local currentSnapshot = BuildCurrentQuestSnapshot()
 
-    DBG("QUEST_LOG_UPDATE fired | initialized=" .. tostring(initialized))
+    if debugMode then
+        DBG("QUEST_LOG_UPDATE fired | initialized=" .. tostring(initialized))
+    end
 
     -- QUEST_LOG_UPDATE: initial snapshot load, abandon detection, start detection
     if not initialized then
         local count = 0
         for _ in pairs(currentSnapshot) do count = count + 1 end
-        DBG("Init snapshot: " .. count .. " quests loaded")
+        if debugMode then
+            DBG("Init snapshot: " .. count .. " quests loaded")
+        end
         knownQuests = currentSnapshot
         initialized = true
     else
@@ -79,12 +85,14 @@ QuestAnnouncer:SetScript("OnEvent", function()
         local toRemove = {}
         for title in pairs(knownQuests) do
             if not currentSnapshot[title] then
-                toRemove[#toRemove + 1] = title
+                table.insert(toRemove, title)
             end
         end
         for _, title in ipairs(toRemove) do
             local data = knownQuests[title]
-            DBG("Quest removed: '" .. title .. "' isComplete=" .. tostring(data.isComplete))
+            if debugMode then
+                DBG("Quest removed: '" .. title .. "' isComplete=" .. tostring(data.isComplete))
+            end
             if not data.isComplete then
                 local questID = GetQuestIDByName(title)
                 local link = MakeQuestLink(questID, title, data.level)
@@ -97,7 +105,9 @@ QuestAnnouncer:SetScript("OnEvent", function()
         -- Detect newly added quests
         for title, data in pairs(currentSnapshot) do
             if not knownQuests[title] then
-                DBG("New quest detected: '" .. title .. "' level=" .. tostring(data.level))
+                if debugMode then
+                    DBG("New quest detected: '" .. title .. "' level=" .. tostring(data.level))
+                end
                 local questID = GetQuestIDByName(title)
                 local link = MakeQuestLink(questID, title, data.level)
                 Announce(link .. " - Quest started")
@@ -125,14 +135,18 @@ QuestAnnouncer:SetScript("OnEvent", function()
             local numObjectives = GetNumQuestLeaderBoards()
             local allDone = true
 
-            DBG("Scanning '" .. title .. "': " .. numObjectives .. " objectives | isComplete=" .. tostring(isComplete))
+            if debugMode then
+                DBG("Scanning '" .. title .. "': " .. numObjectives .. " objectives | isComplete=" .. tostring(isComplete))
+            end
             for j = 1, numObjectives do
                 local desc, otype, done = GetQuestLogLeaderBoard(j)
                 if desc then
                     local key = title .. j
                     local _, _, cur, total = string.find(desc, "(%d+)%s*/%s*(%d+)")
                     cur, total = tonumber(cur), tonumber(total)
-                    DBG("  obj" .. j .. " type='" .. tostring(otype) .. "' done=" .. tostring(done) .. " cur=" .. tostring(cur) .. " total=" .. tostring(total) .. " desc='" .. tostring(desc) .. "'")
+                    if debugMode then
+                        DBG("  obj" .. j .. " type='" .. tostring(otype) .. "' done=" .. tostring(done) .. " cur=" .. tostring(cur) .. " total=" .. tostring(total) .. " desc='" .. tostring(desc) .. "'")
+                    end
 
                     if not done then
                         allDone = false
@@ -169,7 +183,7 @@ QuestAnnouncer:SetScript("OnEvent", function()
     end
 end)
 
-local QUESTANNOUNCER_VERSION = "1.0.2"
+local QUESTANNOUNCER_VERSION = "1.0.3"
 
 SLASH_QUESTANNOUNCER1 = "/qa"
 SlashCmdList["QUESTANNOUNCER"] = function(msg)
